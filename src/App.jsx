@@ -16,6 +16,7 @@ import InfluencerDashboard from "./pages/influencer/Dashboard";
 import CampaignDetails from "./pages/influencer/CampaignDetails";
 import Chat from "./pages/influencer/Chat";
 import MyChats from "./pages/influencer/MyChats";
+import InfluencerProfile from "./pages/influencer/Profile";
 import NotEnoughTokens from "./pages/influencer/NotEnoughTokens";
 
 /* -------- VENDOR PAGES -------- */
@@ -23,7 +24,8 @@ import Home from "./pages/vendor/Home";
 import VendorDashboard from "./pages/vendor/Dashboard";
 import CreateCampaign from "./pages/vendor/CreateCampaign";
 import Products from "./pages/vendor/Products";
-import SalesAnalytics from "./pages/vendor/SalesAnalytics";
+import VendorMyChats from "./pages/vendor/MyChats";
+import VendorChat from "./pages/vendor/Chat";
 
 /* -------- NAVBARS -------- */
 import InfluencerNavbar from "./components/common/InfluencerNavbar";
@@ -101,6 +103,10 @@ function App() {
           element={<MyChats tokens={tokens} />}
         />
         <Route
+          path="/influencer/profile"
+          element={<InfluencerProfile />}
+        />
+        <Route
           path="/influencer/no-tokens"
           element={<NotEnoughTokens />}
         />
@@ -108,9 +114,10 @@ function App() {
         {/* -------- VENDOR -------- */}
         <Route path="/vendor/home" element={<Home />} />
         <Route path="/vendor/dashboard" element={<VendorDashboard />} />
+        <Route path="/vendor/chats" element={<VendorMyChats />} />
+        <Route path="/vendor/chat/:id" element={<VendorChat />} />
         <Route path="/vendor/create" element={<CreateCampaign />} />
         <Route path="/vendor/products" element={<Products />} />
-        <Route path="/vendor/analytics" element={<SalesAnalytics />} />
       </Routes>
     </Router>
   );
