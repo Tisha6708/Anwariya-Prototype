@@ -1,7 +1,8 @@
 from sqlalchemy.orm import Session
 import models
 from sqlalchemy import text
-from schemas import BillCreate
+import schemas 
+from datetime import datetime
 
 # --------------------
 # USERS
@@ -205,38 +206,41 @@ def get_products(db: Session, vendor_id: int):
 
 
 # -------- BILLS --------
-def create_bill(db: Session, bill):
+def create_bill(db: Session, bill: schemas.BillCreate):
     product = db.query(models.Product).filter(
-        models.Product.id == bill.product_id,
-        models.Product.vendor_id == bill.vendor_id
+        models.Product.id == bill.product_id
     ).first()
 
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+        raise ValueError("Product not found")
 
     if product.quantity_available < bill.quantity:
-        raise HTTPException(status_code=400, detail="Insufficient stock")
+        raise ValueError("Insufficient stock")
 
-    # 🔑 CORE LOGIC
-    cost_price = product.cost_price           # PER UNIT
-    selling_price = bill.selling_price        # PER UNIT
+    total = bill.quantity * bill.selling_price
+    cost = bill.quantity * product.cost_price
+    profit = total - cost
 
-    profit_per_unit = selling_price - cost_price
-    total_profit = profit_per_unit * bill.quantity
+    # Deduct stock
+    product.quantity_available -= bill.quantity
 
     new_bill = models.Bill(
         vendor_id=bill.vendor_id,
         product_id=bill.product_id,
+        customer_name=bill.customer_name,
+        customer_email=bill.customer_email,
         quantity=bill.quantity,
-        selling_price=selling_price,
-        cost_price=cost_price,
-        profit=total_profit
+        selling_price=bill.selling_price,
     )
-
-    product.quantity_available -= bill.quantity
 
     db.add(new_bill)
     db.commit()
     db.refresh(new_bill)
 
-    return new_bill
+    return {
+        "bill_id": new_bill.id,
+        "total": total,
+        "profit": profit,
+        "product": product.product_name,
+        "date": new_bill.created_at,
+    }

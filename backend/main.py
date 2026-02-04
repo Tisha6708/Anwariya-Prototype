@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from schemas import BillCreate
@@ -7,6 +7,17 @@ from db import engine, SessionLocal
 from fastapi.middleware.cors import CORSMiddleware
 from analytics import generate_insights
 from sqlalchemy import text
+from utils.pdf import generate_invoice_pdf
+from datetime import datetime
+from utils.email import send_invoice_email
+from utils.pdf import generate_invoice_pdf
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+print("EMAIL:", os.getenv("SMTP_EMAIL"))
+print("PASSWORD:", os.getenv("SMTP_PASSWORD"))
 
 # create tables
 models.Base.metadata.create_all(bind=engine)
@@ -167,18 +178,67 @@ def get_products(vendor_id: int, db: Session = Depends(get_db)):
 # -------- BILLS --------
 @app.post("/bills")
 def create_bill(
-    bill: BillCreate,
-    db: Session = Depends(get_db)
-):
-    return crud.create_bill(db, bill)
-
-@app.post("/bills", response_model=schemas.BillOut)
-def generate_bill(
     bill: schemas.BillCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    return crud.create_bill(db, bill)
+    product = db.query(models.Product).filter(
+        models.Product.id == bill.product_id
+    ).first()
 
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    if product.quantity_available < bill.quantity:
+        raise HTTPException(status_code=400, detail="Insufficient stock")
+
+    total = bill.quantity * bill.selling_price
+    cost = bill.quantity * product.cost_price
+    profit = total - cost
+
+    new_bill = models.Bill(
+        vendor_id=bill.vendor_id,
+        product_id=bill.product_id,
+        customer_name=bill.customer_name,
+        customer_email=bill.customer_email,
+        quantity=bill.quantity,
+        selling_price=bill.selling_price,
+        created_at=datetime.utcnow(),
+    )
+
+    product.quantity_available -= bill.quantity
+
+    db.add(new_bill)
+    db.commit()
+    db.refresh(new_bill)
+
+    # ---------- PDF ----------
+    pdf_path = generate_invoice_pdf({
+        "bill_id": new_bill.id,
+        "customer_name": bill.customer_name,
+        "customer_email": bill.customer_email,
+        "product_name": product.product_name,
+        "quantity": bill.quantity,
+        "price": bill.selling_price,
+        "total": total,
+        "date": new_bill.created_at.strftime("%d %b %Y"),
+    })
+
+    # ---------- EMAIL (SAFE) ----------
+    try:
+        send_invoice_email(bill.customer_email, pdf_path)
+    except Exception as e:
+        print("⚠️ Email failed:", e)
+
+    return {
+        "bill_id": new_bill.id,
+        "product_name": product.product_name,
+        "quantity": bill.quantity,
+        "selling_price": bill.selling_price,
+        "total": total,
+        "profit": profit,
+        "customer_email": bill.customer_email,
+        "pdf_path": pdf_path,
+    }
 
 
 @app.get("/analytics/{vendor_id}")
@@ -186,15 +246,19 @@ def analytics(vendor_id: int, db: Session = Depends(get_db)):
 
     sales = db.execute(
         text("""
-            SELECT 
+            SELECT
                 p.product_name AS name,
                 SUM(b.quantity) AS quantity,
 
+                -- revenue
                 SUM(b.quantity * b.selling_price) AS revenue,
-                SUM(b.quantity * b.cost_price) AS cost,
 
+                -- cost
+                SUM(b.quantity * p.cost_price) AS cost,
+
+                -- profit
                 SUM(b.quantity * b.selling_price)
-                - SUM(b.quantity * b.cost_price) AS profit
+                - SUM(b.quantity * p.cost_price) AS profit
 
             FROM bills b
             JOIN products p ON p.id = b.product_id
@@ -204,42 +268,25 @@ def analytics(vendor_id: int, db: Session = Depends(get_db)):
         {"vendor_id": vendor_id}
     ).mappings().all()
 
-    total_revenue = sum(s["revenue"] or 0 for s in sales)
-    total_cost = sum(s["cost"] or 0 for s in sales)
-    total_profit = sum(s["profit"] or 0 for s in sales)
-    total_units = sum(s["quantity"] or 0 for s in sales)
+    total_profit = sum(row["profit"] or 0 for row in sales)
+    total_units = sum(row["quantity"] or 0 for row in sales)
 
-    if not sales:
-        insight = "No sales yet. Generate bills to unlock insights."
-    else:
-        top = max(sales, key=lambda x: x["quantity"])
-        least = min(sales, key=lambda x: x["quantity"])
-        loss_items = [s for s in sales if s["profit"] < 0]
-
-        insight = f"""
-Top selling product: {top['name']} ({top['quantity']} units)
-Least selling product: {least['name']} ({least['quantity']} units)
-
-Revenue: ₹{total_revenue}
-Cost: ₹{total_cost}
-Profit: ₹{total_profit}
-
-Suggestions:
-- Restock high-performing products
-- Improve pricing or promotions for slow sellers
-""".strip()
-
-        if loss_items:
-            insight += "\n⚠ Some products are selling at a loss."
+    low_stock = db.execute(
+        text("""
+            SELECT product_name, quantity_available
+            FROM products
+            WHERE vendor_id = :vendor_id
+              AND quantity_available < 5
+        """),
+        {"vendor_id": vendor_id}
+    ).mappings().all()
 
     return {
         "kpis": {
-            "total_revenue": total_revenue,
-            "total_cost": total_cost,
             "total_profit": total_profit,
-            "total_units_sold": total_units,
+            "total_units": total_units,
             "product_count": len(sales),
         },
         "sales": sales,
-        "insight": insight,
+        "low_stock": low_stock,
     }

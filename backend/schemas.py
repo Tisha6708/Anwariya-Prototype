@@ -67,10 +67,16 @@ class ProductOut(ProductCreate):
 class BillCreate(BaseModel):
     vendor_id: int
     product_id: int
+    customer_name: str
+    customer_email: str
     quantity: int
     selling_price: float
 
 
 class BillOut(BaseModel):
+    id: int
     total: float
     profit: float
+
+    class Config:
+        from_attributes = True
